@@ -23,6 +23,7 @@ import { SaveModal } from "./components/SaveModal";
 import { NotebookPen, AppWindow, Music, FileText, Film, ChevronDown } from "lucide-react";
 import { lsGet, lsSet } from "./lib/store";
 import { isNativeApp } from "./lib/platform";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const AUTOSAVE_KEY = "ordo:autosave";
 
@@ -49,6 +50,7 @@ interface ExportState {
 
 export default function App() {
   const nativeApp = isNativeApp();
+  const fullscreenTogglePending = useRef(false);
   const [screen, setScreen] = useState<"home" | "work">("home");
   const [doc, setDoc] = useState<OrdoDoc | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -68,6 +70,32 @@ export default function App() {
       return null;
     }
   });
+
+  useEffect(() => {
+    if (!nativeApp) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "F11" && event.code !== "F11") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat || fullscreenTogglePending.current) return;
+      fullscreenTogglePending.current = true;
+      void (async () => {
+        try {
+          const appWindow = getCurrentWindow();
+          await appWindow.setFullscreen(!(await appWindow.isFullscreen()));
+        } catch (error) {
+          console.error("Não foi possível alternar a tela cheia.", error);
+        } finally {
+          fullscreenTogglePending.current = false;
+        }
+      })().catch((error: unknown) => {
+        console.error("Não foi possível processar o atalho de tela cheia.", error);
+      });
+    };
+
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [nativeApp]);
 
   useEffect(() => {
     const mobileViewport = window.matchMedia("(max-width: 1023px)");
