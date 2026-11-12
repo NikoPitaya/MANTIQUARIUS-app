@@ -69,6 +69,19 @@ export default function App() {
     }
   });
 
+  useEffect(() => {
+    const mobileViewport = window.matchMedia("(max-width: 1023px)");
+    const showAvailableMobileModule = () => {
+      if (mobileViewport.matches) {
+        setActiveModule((module) => (module === 1 ? 0 : module));
+      }
+    };
+
+    showAvailableMobileModule();
+    mobileViewport.addEventListener("change", showAvailableMobileModule);
+    return () => mobileViewport.removeEventListener("change", showAvailableMobileModule);
+  }, []);
+
   const docRef = useRef(doc);
   useEffect(() => { docRef.current = doc; });
   const dirtyRef = useRef(dirty);
@@ -348,6 +361,7 @@ export default function App() {
       {/* seletor de módulos — apenas no celular/tablet */}
       <nav className="flex shrink-0 items-stretch gap-1 border-t border-carbon-700/80 bg-carbon-900/95 px-1.5 py-1.5 backdrop-blur lg:hidden">
         {MODULES.map((m, i) => {
+          if (i === 1) return null;
           const active = activeModule === i;
           return (
             <button
