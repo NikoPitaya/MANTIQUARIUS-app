@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   AppWindow,
   Focus,
@@ -9,7 +10,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { PanelChrome, HeaderIconBtn } from "./PanelChrome";
-import { supportsWindowMirroring } from "../lib/platform";
+import { isNativeApp, supportsWindowMirroring } from "../lib/platform";
 
 interface Props {
   opened: boolean;
@@ -23,6 +24,11 @@ interface FocusCaptureController {
 }
 
 type FocusCaptureControllerCtor = new () => FocusCaptureController;
+
+interface OpenApplication {
+  id: string;
+  title: string;
+}
 
 const cleanTrackLabel = (label: string): string => {
   const cleaned = label
@@ -42,7 +48,36 @@ function TabletopPanelInner({ opened, onChange }: Props) {
   const [surface, setSurface] = useState<SurfaceKind>("unknown");
   const [windowName, setWindowName] = useState("aplicativo");
   const [focusHint, setFocusHint] = useState(false);
+  const [applications, setApplications] = useState<OpenApplication[]>([]);
+  const [selectedApplicationId, setSelectedApplicationId] = useState("");
+  const [loadingApplications, setLoadingApplications] = useState(false);
   const canMirrorWindows = supportsWindowMirroring();
+  const nativeApp = isNativeApp();
+  const selectedApplication = applications.find(({ id }) => id === selectedApplicationId) ?? null;
+
+  const refreshApplications = useCallback(async () => {
+    setLoadingApplications(true);
+    setError(null);
+    try {
+      const available = await invoke<OpenApplication[]>("list_open_applications");
+      setApplications(available);
+      setSelectedApplicationId((current) =>
+        available.some(({ id }) => id === current) ? current : available[0]?.id ?? ""
+      );
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message :
+        typeof e === "string" ? e :
+        "não foi possível listar os aplicativos abertos."
+      );
+    } finally {
+      setLoadingApplications(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (nativeApp && canMirrorWindows) void refreshApplications();
+  }, [canMirrorWindows, nativeApp, refreshApplications]);
 
   const stopMirror = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -59,6 +94,10 @@ function TabletopPanelInner({ opened, onChange }: Props) {
   const chooseWindow = useCallback(async () => {
     setError(null);
     setFocusHint(false);
+    if (nativeApp && !selectedApplication) {
+      setError("selecione um aplicativo aberto antes de iniciar o espelhamento.");
+      return;
+    }
     if (!supportsWindowMirroring()) {
       setError("o espelhamento de janelas está disponível apenas no app desktop.");
       return;
@@ -94,7 +133,10 @@ function TabletopPanelInner({ opened, onChange }: Props) {
         options as unknown as DisplayMediaStreamOptions
       );
       const track = stream.getVideoTracks()[0];
-      if (!track) throw new Error("a janela escolhida não forneceu imagem.");
+      if (!track) {
+        stream.getTracks().forEach((item) => item.stop());
+        throw new Error("a janela escolhida não forneceu imagem.");
+      }
 
       // O navegador exige que o comportamento de foco seja definido logo após
       // getDisplayMedia. Mantemos o MANTIQUARIUS em primeiro plano após escolher.
@@ -134,15 +176,27 @@ function TabletopPanelInner({ opened, onChange }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [onChange, opened, stopMirror]);
+  }, [nativeApp, onChange, selectedApplication, stopMirror]);
 
   /**
    * Páginas web não recebem o identificador nativo da janela capturada.
    * Fazemos a melhor tentativa permitida e exibimos o atalho do sistema como
    * fallback quando o navegador bloquear a troca de foco.
    */
-  const focusCapturedApp = useCallback(() => {
+  const focusCapturedApp = useCallback(async () => {
     setFocusHint(false);
+    if (nativeApp && selectedApplication) {
+      try {
+        await invoke("focus_application", { windowId: selectedApplication.id });
+      } catch (e) {
+        setError(
+          e instanceof Error ? e.message :
+          typeof e === "string" ? e :
+          "não foi possível focar o aplicativo selecionado."
+        );
+      }
+      return;
+    }
     try {
       controllerRef.current?.setFocusBehavior?.("focus-captured-surface");
     } catch {
@@ -154,7 +208,7 @@ function TabletopPanelInner({ opened, onChange }: Props) {
       /* alguns navegadores ignoram window.blur */
     }
     window.setTimeout(() => setFocusHint(true), 120);
-  }, []);
+  }, [nativeApp, selectedApplication]);
 
   useEffect(() => {
     return () => {
@@ -245,9 +299,36 @@ function TabletopPanelInner({ opened, onChange }: Props) {
           </div>
         ) : !streaming && (
           <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
+            {nativeApp && (
+              <div className="flex w-full max-w-[360px] items-center gap-2">
+                <select
+                  aria-label="Aplicativo para espelhar"
+                  value={selectedApplicationId}
+                  onChange={(event) => setSelectedApplicationId(event.target.value)}
+                  disabled={loadingApplications || applications.length === 0}
+                  className="min-w-0 flex-1 rounded-lg border border-carbon-600 bg-carbon-900 px-3 py-2 text-sm text-white disabled:opacity-60"
+                >
+                  {applications.length === 0 ? (
+                    <option value="">
+                      {loadingApplications ? "carregando aplicativos..." : "nenhum aplicativo encontrado"}
+                    </option>
+                  ) : applications.map((application) => (
+                    <option key={application.id} value={application.id}>{application.title}</option>
+                  ))}
+                </select>
+                <HeaderIconBtn
+                  title="atualizar aplicativos abertos"
+                  onClick={() => void refreshApplications()}
+                  disabled={loadingApplications}
+                >
+                  <RefreshCw size={12} />
+                </HeaderIconBtn>
+              </div>
+            )}
+
             <button
               onClick={() => void chooseWindow()}
-              disabled={busy}
+              disabled={busy || (nativeApp && !selectedApplication)}
               className="group flex flex-col items-center gap-4 rounded-2xl border border-dashed border-carbon-500 bg-carbon-900/60 px-10 py-8 transition-all hover:border-acid-500/60 hover:bg-carbon-850 active:scale-[0.98] disabled:opacity-60"
             >
               <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-carbon-600 bg-carbon-800 text-carbon-200 transition-colors group-hover:border-acid-500/50 group-hover:text-acid-300">
@@ -262,7 +343,9 @@ function TabletopPanelInner({ opened, onChange }: Props) {
                   {busy ? "aguardando escolha..." : "escolher janela"}
                 </span>
                 <span className="mt-1 block max-w-[290px] font-mono text-[10px] leading-relaxed uppercase tracking-[0.14em] text-carbon-400">
-                  selecione qualquer aplicativo aberto no computador para espelhar aqui
+                  {nativeApp
+                    ? "selecione qualquer janela no seletor do Windows; o clique focará o aplicativo acima"
+                    : "selecione qualquer aplicativo aberto no computador para espelhar aqui"}
                 </span>
               </span>
             </button>
@@ -273,6 +356,11 @@ function TabletopPanelInner({ opened, onChange }: Props) {
             </p>
 
             {error && <ErrText msg={error} />}
+          </div>
+        )}
+        {streaming && error && (
+          <div className="absolute bottom-12 left-1/2 z-10 w-max max-w-[90%] -translate-x-1/2">
+            <ErrText msg={error} />
           </div>
         )}
       </div>

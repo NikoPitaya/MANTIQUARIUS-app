@@ -36,21 +36,24 @@ export function HeaderIconBtn({
   onClick,
   children,
   accent = false,
+  disabled = false,
 }: {
   title: string;
   onClick: () => void;
   children: ReactNode;
   accent?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       title={title}
       onClick={onClick}
+      disabled={disabled}
       className={`flex h-6 w-6 items-center justify-center rounded-md border transition-all active:scale-95 ${
         accent
           ? "border-acid-500/40 bg-acid-400/10 text-acid-300 hover:bg-acid-400/20"
           : "border-transparent text-carbon-300 hover:border-carbon-600 hover:bg-carbon-700/60 hover:text-white"
-      }`}
+      } disabled:cursor-not-allowed disabled:opacity-50`}
     >
       {children}
     </button>
