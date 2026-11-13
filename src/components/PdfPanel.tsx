@@ -11,7 +11,12 @@ import { fileToDataURL, dataURLToUint8, stripExt, uid } from "../lib/ordo";
 import { lsGet, lsSet } from "../lib/store";
 import { useReorder } from "../lib/useReorder";
 import { PanelChrome, HeaderIconBtn } from "./PanelChrome";
-import { openExternalUrl, supportsWindowMirroring } from "../lib/platform";
+import {
+  isNativeApp,
+  openExternalUrl,
+  openSiteWindow,
+  supportsWindowMirroring,
+} from "../lib/platform";
 
 interface Props {
   pdfs: OrdoMedia[];
@@ -20,6 +25,14 @@ interface Props {
 }
 
 type LoadStatus = "idle" | "loading" | "ready" | "error";
+
+const siteWindowLabel = (id: string): string => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash = Math.imul(hash ^ id.charCodeAt(i), 0x01000193);
+  }
+  return `ordo-web-${(hash >>> 0).toString(16)}`;
+};
 
 interface DocView {
   id: string;
@@ -69,6 +82,9 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
   const webWin = useRef<Window | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mirrorVideoRef = useRef<HTMLVideoElement>(null);
+  const canMirrorWindows = supportsWindowMirroring();
+  const canOpenSiteWindow = isNativeApp();
+  const canUseWindowMode = canMirrorWindows || canOpenSiteWindow;
 
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -494,22 +510,33 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
     setStreamingId(null);
   }, []);
 
-  const openWebWindow = useCallback((item: OrdoMedia) => {
+  const openWebWindow = useCallback(async (item: OrdoMedia) => {
     setMirrorError(null);
-    const w = window.open(item.url, "ordo-web", "popup,width=1280,height=860");
-    if (!w) {
-      setMirrorError("o navegador bloqueou o pop-up — permita pop-ups e tente de novo.");
+    if (!item.url) {
+      setMirrorError("este item não possui um endereço de site válido.");
       return null;
     }
-    webWin.current = w;
-    setWinOpenId(item.id);
-    return w;
+
+    try {
+      const w = await openSiteWindow(
+        item.url,
+        siteWindowLabel(item.id),
+        item.name,
+        () => setWinOpenId((current) => current === item.id ? null : current)
+      );
+      if (w) webWin.current = w;
+      setWinOpenId(item.id);
+      return w;
+    } catch (e) {
+      setMirrorError(e instanceof Error ? e.message : "não foi possível abrir o site.");
+      return null;
+    }
   }, []);
 
   const focusWebWindow = useCallback(
     (item: OrdoMedia) => {
       if (webWin.current && !webWin.current.closed) webWin.current.focus();
-      else openWebWindow(item);
+      else void openWebWindow(item);
     },
     [openWebWindow]
   );
@@ -589,8 +616,8 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
   const pageWidth = Math.max(160, (containerW - 28) * zoom);
   const activeItem = pdfs.find((p) => p.id === activePdfId) ?? null;
   const activeWeb = activeItem?.source === "web" && activeItem.url ? activeItem : null;
-  const canMirrorWindows = supportsWindowMirroring();
-  const activeMode = activeWeb && canMirrorWindows ? webMode[activeWeb.id] ?? "frame" : "frame";
+
+  const activeMode = activeWeb && canUseWindowMode ? webMode[activeWeb.id] ?? "frame" : "frame";
   const isMirroring = !!activeWeb && streamingId === activeWeb.id;
 
   return (
@@ -700,8 +727,10 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
                 >
                   embutido
                 </button>
-                {canMirrorWindows && <button
-                  title="janela real espelhada (funciona com qualquer site)"
+                {canUseWindowMode && <button
+                  title={canMirrorWindows
+                    ? "janela real espelhada (funciona com qualquer site)"
+                    : "abrir o site em uma janela do app"}
                   onClick={() => setWebMode((m) => ({ ...m, [activeWeb.id]: "mirror" }))}
                   className={`px-2 py-1 font-mono text-[9px] uppercase tracking-wider transition-colors ${
                     activeMode === "mirror" ? "bg-acid-400/15 text-acid-300" : "text-carbon-400 hover:text-white"
@@ -752,12 +781,12 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
               )}
 
               <button
-                title={canMirrorWindows ? "abrir em nova janela" : "abrir no navegador externo"}
+                title={canUseWindowMode ? "abrir em nova janela do app" : "abrir no navegador externo"}
                 onClick={() => {
                   const url = activeWeb.url;
                   if (!url) return;
-                  if (canMirrorWindows) {
-                    window.open(url, "_blank", "noopener");
+                  if (canUseWindowMode) {
+                    void openWebWindow(activeWeb);
                   } else {
                     void openExternalUrl(url).catch((error: unknown) =>
                       setMirrorError(
@@ -784,7 +813,7 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
                 />
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-2">
                   <span className="pointer-events-auto rounded-full border border-carbon-600 bg-carbon-950/90 px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-carbon-400 backdrop-blur">
-                    {canMirrorWindows
+                    {canUseWindowMode
                       ? "em branco? troque para o modo janela"
                       : "se o site bloquear a incorporação, abra no navegador externo"}
                   </span>
@@ -814,26 +843,28 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
                 {!isMirroring && (
                   <div className="flex h-full flex-col items-center justify-center gap-4 p-5 text-center">
                     <p className="max-w-[300px] text-[12px] leading-relaxed text-carbon-300">
-                      abra o site em uma janela real e espelhe aqui — funciona com{" "}
-                      <span className="font-medium text-white">qualquer site</span>, mesmo os que
-                      bloqueiam incorporação.
+                      {canMirrorWindows
+                        ? <>abra o site em uma janela real e espelhe aqui — funciona com{" "}
+                          <span className="font-medium text-white">qualquer site</span>, mesmo os que
+                          bloqueiam incorporação.</>
+                        : "abra o site em uma janela do app para usar páginas que bloqueiam incorporação."}
                     </p>
                     <div className="flex flex-wrap items-center justify-center gap-2">
                       <button
-                        onClick={() => openWebWindow(activeWeb)}
+                        onClick={() => void openWebWindow(activeWeb)}
                         className="flex items-center gap-2 rounded-xl bg-acid-400 px-4 py-2.5 text-[12.5px] font-bold text-carbon-950 transition-colors hover:bg-acid-300"
                       >
                         <MonitorUp size={14} />
-                        {winOpenId === activeWeb.id ? "reabrir janela" : "abrir o site"}
+                        {winOpenId === activeWeb.id ? "focar janela" : "abrir o site"}
                       </button>
-                      <button
+                      {canMirrorWindows && <button
                         onClick={() => void startMirror(activeWeb)}
                         disabled={mirrorBusy}
                         className="flex items-center gap-2 rounded-xl border border-carbon-600 px-4 py-2.5 text-[12.5px] font-medium text-carbon-100 transition-colors hover:border-acid-500/50 hover:text-acid-300 disabled:opacity-60"
                       >
                         <ScreenShare size={14} />
                         {mirrorBusy ? "aguardando..." : "espelhar janela"}
-                      </button>
+                      </button>}
                     </div>
                     {mirrorError && (
                       <p className="anim-pop-in max-w-[300px] rounded-lg border border-ember-400/40 bg-ember-400/10 px-3 py-2 text-[11.5px] leading-snug text-ember-400">
