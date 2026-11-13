@@ -1,29 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import type { OrdoDoc } from "./types";
 import {
   emptyDoc,
   parseDoc,
   parseOrdoFile,
   prepareOrdoExport,
-  requestPreparedDownload,
-  savePreparedViaPicker,
   serializeDoc,
 } from "./lib/ordo";
-import type { ExportBundle } from "./lib/ordo";
 import { Home } from "./components/Home";
+import { Library } from "./components/Library";
 import { TopBar } from "./components/TopBar";
 import { NotesPanel } from "./components/NotesPanel";
 import { OwlbearPanel } from "./components/OwlbearPanel";
 import { AudioPanel } from "./components/AudioPanel";
 import { PdfPanel } from "./components/PdfPanel";
 import { VideoPanel } from "./components/VideoPanel";
-import { SaveModal } from "./components/SaveModal";
 import { NotebookPen, AppWindow, Music, FileText, Film, ChevronDown } from "lucide-react";
 import { lsGet, lsSet } from "./lib/store";
-import { isNativeApp } from "./lib/platform";
+import { isAndroidRuntime, isNativeApp } from "./lib/platform";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  deleteLibraryFile,
+  getLibraryFile,
+  listLibraryFiles,
+  openLibraryLocation,
+  pickOrdoFile,
+  renameLibraryFile,
+  saveLibraryFile,
+  shareLibraryFileOnAndroid,
+} from "./lib/fileLibrary";
+import type { LibraryFile } from "./lib/fileLibrary";
 
 const AUTOSAVE_KEY = "ordo:autosave";
 
@@ -40,26 +46,21 @@ interface AutosaveMeta {
   savedAt: string;
 }
 
-interface ExportState {
-  phase: "preparing" | "ready" | "error";
-  progress: number;
-  label: string;
-  bundle: ExportBundle | null;
-  error: string | null;
-}
-
 export default function App() {
   const nativeApp = isNativeApp();
   const fullscreenTogglePending = useRef(false);
-  const [screen, setScreen] = useState<"home" | "work">("home");
+  const [screen, setScreen] = useState<"home" | "library" | "work">("home");
   const [doc, setDoc] = useState<OrdoDoc | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
-  const [exportState, setExportState] = useState<ExportState | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [activeModule, setActiveModule] = useState(0);
   const [topBarOpen, setTopBarOpen] = useState(() => lsGet("ordo:ui:topbar") !== "0");
   const [homeError, setHomeError] = useState<string | null>(null);
+  const [libraryFiles, setLibraryFiles] = useState<LibraryFile[]>([]);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [currentFileId, setCurrentFileId] = useState<string | null>(null);
   const [autosaveMeta, setAutosaveMeta] = useState<AutosaveMeta | null>(() => {
     try {
       const raw = localStorage.getItem(AUTOSAVE_KEY);
@@ -112,15 +113,30 @@ export default function App() {
 
   const docRef = useRef(doc);
   useEffect(() => { docRef.current = doc; });
+  const currentFileIdRef = useRef(currentFileId);
+  useEffect(() => { currentFileIdRef.current = currentFileId; });
   const dirtyRef = useRef(dirty);
   useEffect(() => { dirtyRef.current = dirty; });
-  const exportRunRef = useRef(0);
   const savingRef = useRef(false);
+
+  const refreshLibrary = useCallback(async () => {
+    try {
+      setLibraryFiles(await listLibraryFiles());
+      setLibraryError(null);
+    } catch (error) {
+      setLibraryError(error instanceof Error ? error.message : "não foi possível carregar seus arquivos.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (screen === "library") void refreshLibrary();
+  }, [screen, refreshLibrary]);
 
   /* ---------------- doc updates ---------------- */
   const patch = useCallback((p: Partial<OrdoDoc>) => {
     setDoc((d) => (d ? { ...d, ...p } : d));
     setDirty(true);
+    setSaveError(null);
   }, []);
 
   const handleNotes = useCallback(
@@ -150,97 +166,107 @@ export default function App() {
     setTimeout(() => setSavedFlash(false), 2000);
   }, []);
 
-  const prepareExport = useCallback(async (source: OrdoDoc) => {
-    const run = ++exportRunRef.current;
-    savingRef.current = true;
-    setSaving(true);
-    setExportState({
-      phase: "preparing",
-      progress: 0,
-      label: "iniciando preparação",
-      bundle: null,
-      error: null,
-    });
-    try {
-      const bundle = await prepareOrdoExport(source, (progress, label) => {
-        if (exportRunRef.current !== run) return;
-        setExportState((state) => state ? { ...state, progress, label } : state);
-      });
-      if (exportRunRef.current !== run) return;
-      savingRef.current = false;
-      setSaving(false);
-      setExportState({
-        phase: "ready",
-        progress: 1,
-        label: "arquivo pronto para baixar",
-        bundle,
-        error: null,
-      });
-      // Em ambientes que permitem downloads programáticos, já começa após gerar tudo.
-      if (!nativeApp) requestPreparedDownload(bundle);
-    } catch (error) {
-      if (exportRunRef.current !== run) return;
-      savingRef.current = false;
-      setSaving(false);
-      setExportState({
-        phase: "error",
-        progress: 0,
-        label: "falha na preparação",
-        bundle: null,
-        error: error instanceof Error ? error.message : "não foi possível montar o arquivo .ordo.",
-      });
-    }
-  }, [nativeApp]);
-
-  const save = useCallback(() => {
+  const save = useCallback(async () => {
     const source = docRef.current;
     if (!source || savingRef.current) return;
-    void prepareExport(source);
-  }, [prepareExport]);
+    savingRef.current = true;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const bundle = await prepareOrdoExport(source);
+      const saved = await saveLibraryFile(currentFileIdRef.current, source.name, bundle.blob);
+      setCurrentFileId(saved.id);
+      currentFileIdRef.current = saved.id;
+      flashSaved();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "não foi possível salvar o arquivo .ordo.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }, [flashSaved]);
 
-  const openFile = useCallback(async (file: File) => {
+  const openFile = useCallback(async (
+    file: File,
+    fileId: string | null = null,
+    savedName?: string
+  ) => {
     setHomeError(null);
     const parsed = await parseOrdoFile(file);
     if (!parsed) {
-      setHomeError("este arquivo não é um .ordo válido.");
+      const message = "este arquivo não é um .ordo válido.";
+      if (screen === "library") setLibraryError(message);
+      else setHomeError(message);
       return;
     }
-    if (!parsed.name || parsed.name === "sessão importada") {
+    if (savedName) {
+      parsed.name = savedName;
+    } else if (!parsed.name || parsed.name === "sessão importada") {
       parsed.name = file.name.replace(/\.ordo$/i, "") || parsed.name;
     }
     setDoc(parsed);
+    setCurrentFileId(fileId);
+    currentFileIdRef.current = fileId;
     setDirty(false);
     setScreen("work");
-  }, []);
+  }, [screen]);
 
-  const chooseNativeFile = useCallback(async () => {
-    setHomeError(null);
+  const importOrdoFromDevice = useCallback(async () => {
     try {
-      const selectedPath = await openDialog({
-        multiple: false,
-        directory: false,
-        filters: [{ name: "Arquivo ORDO", extensions: ["ordo"] }],
-      });
-      if (typeof selectedPath !== "string") return;
-
-      const bytes = await readFile(selectedPath);
-      const contents = new Uint8Array(bytes);
-      let fileName = selectedPath.split(/[\\/]/).pop() || "sessao.ordo";
-      try {
-        fileName = decodeURIComponent(fileName);
-      } catch {
-        // Keep literal percent characters in local filenames.
-      }
-      await openFile(new File([contents.buffer as ArrayBuffer], fileName));
+      const file = await pickOrdoFile();
+      if (file) await openFile(file);
     } catch (error) {
-      setHomeError(
-        error instanceof Error ? error.message : "não foi possível abrir o arquivo .ordo."
-      );
+      const message = error instanceof Error ? error.message : "não foi possível importar o arquivo .ordo.";
+      if (screen === "library") setLibraryError(message);
+      else setHomeError(message);
+    }
+  }, [openFile, screen]);
+
+  const openLibraryFile = useCallback(async (id: string) => {
+    try {
+      const savedFile = await getLibraryFile(id);
+      if (!savedFile) throw new Error("o arquivo não foi encontrado na biblioteca.");
+      await openFile(new File([savedFile.blob], `${savedFile.name}.ordo`), id, savedFile.name);
+    } catch (error) {
+      setLibraryError(error instanceof Error ? error.message : "não foi possível abrir o arquivo .ordo.");
     }
   }, [openFile]);
 
+  const shareLibraryFile = useCallback(async (id: string) => {
+    if (nativeApp && isAndroidRuntime()) {
+      await shareLibraryFileOnAndroid(id);
+      return;
+    }
+    const savedFile = await getLibraryFile(id);
+    if (!savedFile) throw new Error("o arquivo não foi encontrado na biblioteca.");
+    const file = new File([savedFile.blob], `${savedFile.name}.ordo`, {
+      type: "application/octet-stream",
+    });
+    if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) {
+      await navigator.share({ files: [file], title: file.name });
+      return;
+    }
+    const url = URL.createObjectURL(savedFile.blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = file.name;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [nativeApp]);
+
+  const handleOpenLibraryLocation = useCallback(async () => {
+    try {
+      await openLibraryLocation();
+      setLibraryError(null);
+    } catch (error) {
+      setLibraryError(error instanceof Error ? error.message : "não foi possível abrir o local dos arquivos.");
+    }
+  }, []);
+
   const createNew = useCallback(() => {
     setDoc(emptyDoc());
+    setCurrentFileId(null);
+    currentFileIdRef.current = null;
     setDirty(false);
     setScreen("work");
   }, []);
@@ -252,6 +278,8 @@ export default function App() {
       const parsed = parseDoc(raw);
       if (parsed) {
         setDoc(parsed);
+        setCurrentFileId(null);
+        currentFileIdRef.current = null;
         setDirty(false);
         setScreen("work");
       }
@@ -267,15 +295,12 @@ export default function App() {
 
   const close = useCallback(() => {
     const d = docRef.current;
-    if (d) {
-      const hasAnything =
-        d.audios.length + d.pdfs.length + d.videos.length > 0 ||
-        d.notes.some((n) => n.content.replace(/<[^>]*>/g, "").trim().length > 0);
-      if (hasAnything && !window.confirm("fechar o arquivo? guarde o .ordo antes se quiser manter tudo.")) {
-        return;
-      }
+    if (d && dirtyRef.current && !window.confirm("há alterações não salvas. fechar sem salvar?")) {
+      return;
     }
     setDoc(null);
+    setCurrentFileId(null);
+    currentFileIdRef.current = null;
     setDirty(false);
     setScreen("home");
     try {
@@ -332,11 +357,13 @@ export default function App() {
     return parts.join(" · ");
   }, [doc]);
 
-  if (screen === "home" || !doc) {
+  if (screen === "home") {
     return (
       <Home
         onOpenFile={openFile}
-        onChooseFile={nativeApp ? chooseNativeFile : undefined}
+        onImportFromDevice={importOrdoFromDevice}
+        useNativeImporter={nativeApp && isAndroidRuntime()}
+        onChooseFile={() => setScreen("library")}
         onCreate={createNew}
         onRestore={restoreAutosave}
         onDiscardAutosave={discardAutosave}
@@ -346,6 +373,34 @@ export default function App() {
     );
   }
 
+  if (screen === "library") {
+    return (
+      <Library
+        files={libraryFiles}
+        error={libraryError}
+        onBack={() => setScreen("home")}
+        onOpen={(id) => void openLibraryFile(id)}
+        onImport={(file) => void openFile(file)}
+        onImportFromDevice={() => void importOrdoFromDevice()}
+        onOpenLocation={() => void handleOpenLibraryLocation()}
+        showOpenLocation={nativeApp}
+        useNativeImporter={nativeApp && isAndroidRuntime()}
+        showShare={isAndroidRuntime()}
+        onRename={async (id, name) => {
+          await renameLibraryFile(id, name);
+          await refreshLibrary();
+        }}
+        onDelete={async (id) => {
+          await deleteLibraryFile(id);
+          await refreshLibrary();
+        }}
+        onShare={shareLibraryFile}
+      />
+    );
+  }
+
+  if (!doc) return null;
+
   return (
     <div className="ws-backdrop relative flex h-full flex-col">
       {topBarOpen ? (
@@ -354,6 +409,7 @@ export default function App() {
           dirty={dirty}
           saving={saving}
           savedFlash={savedFlash}
+          saveError={saveError}
           status={status}
           onRename={(name) => patch({ name })}
           onSave={save}
@@ -406,40 +462,6 @@ export default function App() {
         })}
       </nav>
 
-      {exportState && (
-        <SaveModal
-          phase={exportState.phase}
-          progress={exportState.progress}
-          label={exportState.label}
-          bundle={exportState.bundle}
-          error={exportState.error}
-          nativeApp={nativeApp}
-          onRetry={() => {
-            const source = docRef.current;
-            if (source) void prepareExport(source);
-          }}
-          onNativeSave={async () => {
-            if (!exportState.bundle) return false;
-            if (nativeApp) {
-              const filePath = await saveDialog({
-                defaultPath: exportState.bundle.fileName,
-                filters: [{ name: "Arquivo ORDO", extensions: ["ordo"] }],
-              });
-              if (!filePath) return false;
-              const bytes = new Uint8Array(await exportState.bundle.blob.arrayBuffer());
-              await writeFile(filePath, bytes);
-            } else {
-              const ok = await savePreparedViaPicker(exportState.bundle);
-              if (!ok) return false;
-            }
-            flashSaved();
-            setExportState(null);
-            return true;
-          }}
-          onDownload={flashSaved}
-          onClose={() => setExportState(null)}
-        />
-      )}
     </div>
   );
 }

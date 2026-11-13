@@ -17,6 +17,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-vnidrop-fs = { version = "1.0.0-rc.2", features = ["legacy_storage_permission"] }
 serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
