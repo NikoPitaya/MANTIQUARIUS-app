@@ -3,7 +3,9 @@ import { FilePlus2, FolderOpen, History, LoaderCircle, Hexagon, Trash2 } from "l
 
 interface Props {
   onOpenFile: (file: File) => Promise<void>;
-  onChooseFile?: () => Promise<void>;
+  onImportFromDevice: () => Promise<void>;
+  useNativeImporter: boolean;
+  onChooseFile: () => void;
   onCreate: () => void;
   onRestore: () => void;
   onDiscardAutosave: () => void;
@@ -13,6 +15,8 @@ interface Props {
 
 export function Home({
   onOpenFile,
+  onImportFromDevice,
+  useNativeImporter,
   onChooseFile,
   onCreate,
   onRestore,
@@ -35,14 +39,14 @@ export function Home({
     }
   };
 
-  const chooseFile = async () => {
-    if (!onChooseFile) {
+  const importFile = async () => {
+    if (!useNativeImporter) {
       inputRef.current?.click();
       return;
     }
     setBusy(true);
     try {
-      await onChooseFile();
+      await onImportFromDevice();
     } finally {
       setBusy(false);
     }
@@ -96,7 +100,7 @@ export function Home({
         style={{ animationDelay: "0.15s" }}
       >
         <button
-          onClick={() => void chooseFile()}
+          onClick={onChooseFile}
           className="group relative flex flex-col items-start gap-6 overflow-hidden rounded-2xl border border-dashed border-carbon-500 bg-carbon-900/60 p-6 text-left transition-all hover:border-acid-500/60 hover:bg-carbon-850 active:scale-[0.985]"
         >
           <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-carbon-600 bg-carbon-800 text-carbon-200 transition-colors group-hover:border-acid-500/50 group-hover:text-acid-300">
@@ -109,7 +113,7 @@ export function Home({
           <span>
             <span className="block font-display text-base font-semibold text-white">abrir arquivo</span>
             <span className="mt-1 block font-mono text-[10.5px] uppercase tracking-[0.16em] text-carbon-400">
-              arraste ou clique · .ordo
+              abrir arquivos salvos
             </span>
           </span>
         </button>
@@ -166,10 +170,17 @@ export function Home({
         </p>
       )}
 
+      <button
+        onClick={() => void importFile()}
+        className="anim-fade-up relative z-10 mt-4 font-mono text-[10px] uppercase tracking-wider text-carbon-400 underline decoration-carbon-600 underline-offset-4 transition-colors hover:text-acid-300"
+      >
+        importar arquivo .ordo
+      </button>
+
       <input
         ref={inputRef}
         type="file"
-        accept=".ordo,application/json"
+        accept="*/*,.ordo"
         className="hidden"
         onChange={(e) => {
           void handleFiles(e.target.files);

@@ -11,6 +11,29 @@
     "dialog:allow-save",
     "fs:allow-read-file",
     "fs:allow-write-file",
-    "opener:default"
+    "fs:allow-read-dir",
+    "fs:allow-mkdir",
+    "fs:allow-remove",
+    "fs:allow-exists",
+    "fs:allow-rename",
+    "opener:default",
+    "opener:allow-reveal-item-in-dir",
+    "vnidrop-fs:allow-create-new-public-file",
+    "vnidrop-fs:allow-get-type",
+    "vnidrop-fs:allow-write-file",
+    "vnidrop-fs:allow-scan-public-file",
+    "vnidrop-fs:allow-remove-file",
+    "vnidrop-fs:allow-read-file",
+    "vnidrop-fs:allow-get-metadata",
+    "vnidrop-fs:allow-show-open-file-picker",
+    "vnidrop-fs:allow-show-open-dir-picker",
+    "vnidrop-fs:allow-persist-picker-uri-permission",
+    "vnidrop-fs:allow-check-persisted-picker-uri-permission",
+    "vnidrop-fs:allow-show-share-file-dialog",
+    "vnidrop-fs:allow-show-view-dir-dialog",
+    {
+      "identifier": "fs:scope",
+      "allow": ["$DOCUMENT/MANTIQUARIUS", "$DOCUMENT/MANTIQUARIUS/**/*"]
+    }
   ]
 }

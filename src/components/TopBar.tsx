@@ -6,6 +6,7 @@ interface Props {
   dirty: boolean;
   saving: boolean;
   savedFlash: boolean;
+  saveError: string | null;
   status: string;
   onRename: (name: string) => void;
   onSave: () => void;
@@ -13,7 +14,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function TopBar({ name, dirty, saving, savedFlash, status, onRename, onSave, onHide, onClose }: Props) {
+export function TopBar({ name, dirty, saving, savedFlash, saveError, status, onRename, onSave, onHide, onClose }: Props) {
   const [editing, setEditing] = useState(false);
   const [temp, setTemp] = useState(name);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -104,9 +105,18 @@ export function TopBar({ name, dirty, saving, savedFlash, status, onRename, onSa
             <Save size={13.5} strokeWidth={2.2} />
           )}
           <span className="hidden sm:inline">
-            {saving ? "preparando" : savedFlash ? "salvo" : "salvar .ordo"}
+            {saving ? "salvando" : savedFlash ? "salvo" : "salvar .ordo"}
           </span>
         </button>
+        {saveError && (
+          <span
+            role="status"
+            title={saveError}
+            className="max-w-40 truncate text-[10px] text-ember-400"
+          >
+            falha ao salvar
+          </span>
+        )}
         <button
           onClick={onHide}
           title="esconder menu superior"
