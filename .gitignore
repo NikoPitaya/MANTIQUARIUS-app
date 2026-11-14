@@ -1,4 +1,7 @@
 node_modules/
 dist/
 src-tauri/target/
+src-tauri/cef-host/target/
+src-tauri/cef-runtime/*
+!src-tauri/cef-runtime/runtime-placeholder
 src-tauri/gen/schemas/

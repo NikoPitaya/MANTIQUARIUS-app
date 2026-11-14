@@ -8,8 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File src-tauri/cef-host/prepare.ps1 && tauri dev",
+    "tauri:build": "powershell -NoProfile -ExecutionPolicy Bypass -File src-tauri/cef-host/prepare.ps1 && tauri build",
     "android:init": "tauri android init",
     "android:dev": "tauri android dev",
     "android:build": "tauri android build"

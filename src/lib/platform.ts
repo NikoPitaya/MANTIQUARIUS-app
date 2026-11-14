@@ -5,6 +5,9 @@ export const isNativeApp = (): boolean => isTauri();
 
 export const isAndroidRuntime = (): boolean => /android/i.test(navigator.userAgent);
 
+export const supportsEmbeddedChromium = (): boolean =>
+  isTauri() && !isAndroidRuntime() && /windows/i.test(navigator.userAgent);
+
 export const supportsWindowMirroring = (): boolean => !isAndroidRuntime();
 
 export const openSiteWindow = async (

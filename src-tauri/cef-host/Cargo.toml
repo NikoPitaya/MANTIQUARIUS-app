@@ -1,0 +1,16 @@
+[package]
+name = "cefbrowser"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "cefbrowser"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "bundle-cef-host"
+path = "src/bin/bundle.rs"
+
+[dependencies]
+cef = { version = "156.4.0", features = ["build-util"] }
+url = "2"

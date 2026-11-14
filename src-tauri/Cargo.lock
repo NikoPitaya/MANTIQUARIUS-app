@@ -2011,6 +2011,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-opener",
  "tauri-plugin-vnidrop-fs",
+ "url",
  "windows-sys 0.61.2",
 ]
 

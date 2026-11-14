@@ -21,6 +21,7 @@ tauri-plugin-vnidrop-fs = { version = "1.0.0-rc.2", features = ["legacy_storage_
 serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
+url = "2"
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
