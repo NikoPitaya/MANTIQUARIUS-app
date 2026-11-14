@@ -15,40 +15,88 @@ struct EmbeddedBrowser {
 #[derive(Default)]
 struct EmbeddedBrowserState {
     active: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, EmbeddedBrowser>>>,
+    shutting_down: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(windows)]
 impl Drop for EmbeddedBrowserState {
     fn drop(&mut self) {
-        if let Some(active) = std::sync::Arc::get_mut(&mut self.active) {
-            if let Ok(browsers) = active.get_mut() {
-                for browser in browsers.values_mut() {
-                    let _ = browser.child.kill();
-                    let _ = browser.child.wait();
-                }
-            }
-        }
+        close_embedded_browsers(self);
     }
 }
 
 #[cfg(windows)]
-fn stop_embedded_browser(browser: &mut EmbeddedBrowser) -> Result<(), String> {
-    if browser
-        .child
+fn stop_direct_child(child: &mut std::process::Child) -> Result<(), String> {
+    if child
         .try_wait()
         .map_err(|error| format!("não foi possível verificar o Chromium: {error}"))?
         .is_none()
     {
-        browser
-            .child
+        child
             .kill()
             .map_err(|error| format!("não foi possível fechar o Chromium: {error}"))?;
-        browser
-            .child
-            .wait()
-            .map_err(|error| format!("não foi possível aguardar o Chromium: {error}"))?;
     }
+    child
+        .wait()
+        .map_err(|error| format!("não foi possível aguardar o Chromium: {error}"))?;
     Ok(())
+}
+
+#[cfg(windows)]
+fn stop_child_process_tree(child: &mut std::process::Child) -> Result<(), String> {
+    use std::process::Command;
+
+    if child
+        .try_wait()
+        .map_err(|error| format!("não foi possível verificar o Chromium: {error}"))?
+        .is_none()
+    {
+        let process_id = child.id().to_string();
+        let result = Command::new("taskkill")
+            .args(["/PID", process_id.as_str(), "/T", "/F"])
+            .output();
+
+        match result {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                stop_direct_child(child)?;
+                return Err(format!(
+                    "não foi possível fechar todos os processos do Chromium: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            Err(error) => {
+                stop_direct_child(child)?;
+                return Err(format!(
+                    "não foi possível encerrar os processos do Chromium: {error}"
+                ));
+            }
+        }
+    }
+    stop_direct_child(child)
+}
+
+#[cfg(windows)]
+fn stop_embedded_browser(browser: &mut EmbeddedBrowser) -> Result<(), String> {
+    stop_child_process_tree(&mut browser.child)
+}
+
+#[cfg(windows)]
+fn close_embedded_browsers(state: &EmbeddedBrowserState) {
+    use std::sync::atomic::Ordering;
+
+    state.shutting_down.store(true, Ordering::Release);
+    match state.active.lock() {
+        Ok(mut browsers) => {
+            for browser in browsers.values_mut() {
+                if let Err(error) = stop_embedded_browser(browser) {
+                    eprintln!("{error}");
+                }
+            }
+            browsers.clear();
+        }
+        Err(_) => eprintln!("o estado do navegador está indisponível durante o fechamento."),
+    }
 }
 
 #[cfg(windows)]
@@ -152,10 +200,21 @@ async fn cef_open_browser(
         .map_err(|error| format!("não foi possível criar o perfil Chromium: {error}"))?;
     let executable = cef_host_executable(&app)?;
     let active = state.active.clone();
+    let shutting_down = state.shutting_down.clone();
     let url = parsed.to_string();
     tauri::async_runtime::spawn_blocking(move || {
         cef_open_browser_blocking(
-            active, media_id, url, x, y, width, height, parent, cache_dir, executable,
+            active,
+            shutting_down,
+            media_id,
+            url,
+            x,
+            y,
+            width,
+            height,
+            parent,
+            cache_dir,
+            executable,
         )
     })
     .await
@@ -165,6 +224,7 @@ async fn cef_open_browser(
 #[cfg(windows)]
 fn cef_open_browser_blocking(
     active: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, EmbeddedBrowser>>>,
+    shutting_down: std::sync::Arc<std::sync::atomic::AtomicBool>,
     media_id: String,
     url: String,
     x: i32,
@@ -179,6 +239,7 @@ fn cef_open_browser_blocking(
         hash::{Hash, Hasher},
         io::{BufRead, BufReader},
         process::{Command, Stdio},
+        sync::atomic::Ordering,
         sync::mpsc,
         time::Duration,
     };
@@ -188,6 +249,9 @@ fn cef_open_browser_blocking(
         let mut browsers = active
             .lock()
             .map_err(|_| "o estado do navegador está indisponível.".to_owned())?;
+        if shutting_down.load(Ordering::Acquire) {
+            return Err("o MANTIQUARIUS está sendo fechado.".to_owned());
+        }
         if let Some(browser) = browsers.get_mut(&media_id) {
             if browser.url == url {
                 return set_embedded_browser_bounds(browser.hwnd, x, y, width, height);
@@ -256,20 +320,23 @@ fn cef_open_browser_blocking(
     let hwnd = match receiver.recv_timeout(Duration::from_secs(60)) {
         Ok(Ok(hwnd)) => hwnd,
         Ok(Err(error)) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Err(cleanup_error) = stop_child_process_tree(&mut child) {
+                eprintln!("{cleanup_error}");
+            }
             return Err(error);
         }
         Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Err(cleanup_error) = stop_child_process_tree(&mut child) {
+                eprintln!("{cleanup_error}");
+            }
             return Err("o Chromium não concluiu a inicialização em 60 segundos.".to_owned());
         }
     };
     unsafe {
         if IsWindow(hwnd as windows_sys::Win32::Foundation::HWND) == 0 {
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Err(error) = stop_child_process_tree(&mut child) {
+                eprintln!("{error}");
+            }
             return Err("o Windows não criou a janela Chromium.".to_owned());
         }
     }
@@ -277,6 +344,13 @@ fn cef_open_browser_blocking(
     let mut browsers = active
         .lock()
         .map_err(|_| "o estado do navegador está indisponível.".to_owned())?;
+    if shutting_down.load(Ordering::Acquire) {
+        let mut browser = EmbeddedBrowser { url, child, hwnd };
+        if let Err(error) = stop_embedded_browser(&mut browser) {
+            eprintln!("{error}");
+        }
+        return Err("o MANTIQUARIUS está sendo fechado.".to_owned());
+    }
     if let Some(mut previous) = browsers.remove(&media_id) {
         stop_embedded_browser(&mut previous)?;
     }
@@ -449,7 +523,14 @@ pub fn run() {
         focus_application
     ]);
 
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running Tauri application");
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building Tauri application");
+    app.run(|app_handle, event| {
+        #[cfg(windows)]
+        if matches!(event, tauri::RunEvent::Exit) {
+            use tauri::Manager;
+            close_embedded_browsers(app_handle.state::<EmbeddedBrowserState>().inner());
+        }
+    });
 }
