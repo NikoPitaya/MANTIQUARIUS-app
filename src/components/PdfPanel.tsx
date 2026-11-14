@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import PdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?worker&inline";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import {
@@ -11,10 +12,12 @@ import { fileToDataURL, dataURLToUint8, stripExt, uid } from "../lib/ordo";
 import { lsGet, lsSet } from "../lib/store";
 import { useReorder } from "../lib/useReorder";
 import { PanelChrome, HeaderIconBtn } from "./PanelChrome";
+import { CefBrowserSurface } from "./CefBrowserSurface";
 import {
   isNativeApp,
   openExternalUrl,
   openSiteWindow,
+  supportsEmbeddedChromium,
   supportsWindowMirroring,
 } from "../lib/platform";
 
@@ -74,6 +77,7 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
   const [linkUrl, setLinkUrl] = useState("");
   const [linkError, setLinkError] = useState<string | null>(null);
   const [frameKey, setFrameKey] = useState(0);
+  const [cefReloadKey, setCefReloadKey] = useState(0);
   const [webMode, setWebMode] = useState<Record<string, "frame" | "mirror">>({});
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [winOpenId, setWinOpenId] = useState<string | null>(null);
@@ -84,6 +88,7 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
   const mirrorVideoRef = useRef<HTMLVideoElement>(null);
   const canMirrorWindows = supportsWindowMirroring();
   const canOpenSiteWindow = isNativeApp();
+  const canUseEmbeddedChromium = supportsEmbeddedChromium();
   const canUseWindowMode = canMirrorWindows || canOpenSiteWindow;
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -103,6 +108,7 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
 
   const pdfsRef = useRef(pdfs);
   useEffect(() => { pdfsRef.current = pdfs; });
+  const cefSiteIds = useRef(new Set(pdfs.filter((item) => item.source === "web").map((item) => item.id)));
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; });
   const zoomRef = useRef(zoom);
@@ -222,6 +228,31 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
   /* ---------------- document loading ---------------- */
   const activeIdRef = useRef(activePdfId);
   useEffect(() => { activeIdRef.current = activePdfId; });
+
+  useEffect(() => {
+    const currentSiteIds = new Set(
+      pdfs.filter((item) => item.source === "web").map((item) => item.id)
+    );
+    if (canUseEmbeddedChromium) {
+      for (const id of cefSiteIds.current) {
+        if (!currentSiteIds.has(id)) {
+          void invoke("cef_close_browser", { mediaId: id }).catch((reason: unknown) =>
+            console.error("Não foi possível fechar o Chromium removido da lista.", reason)
+          );
+        }
+      }
+    }
+    cefSiteIds.current = currentSiteIds;
+  }, [canUseEmbeddedChromium, pdfs]);
+
+  useEffect(() => () => {
+    if (!canUseEmbeddedChromium) return;
+    for (const id of cefSiteIds.current) {
+      void invoke("cef_close_browser", { mediaId: id }).catch((reason: unknown) =>
+        console.error("Não foi possível fechar o Chromium ao sair do leitor.", reason)
+      );
+    }
+  }, [canUseEmbeddedChromium]);
 
   useEffect(() => {
     if (!activePdfId) {
@@ -618,6 +649,7 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
   const activeWeb = activeItem?.source === "web" && activeItem.url ? activeItem : null;
 
   const activeMode = activeWeb && canUseWindowMode ? webMode[activeWeb.id] ?? "frame" : "frame";
+  const usesEmbeddedChromium = !!activeWeb && canUseEmbeddedChromium;
   const isMirroring = !!activeWeb && streamingId === activeWeb.id;
 
   return (
@@ -705,7 +737,7 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
         }}
       >
         {activeWeb ? (
-          /* ---------- site: modo embutido ou janela espelhada ---------- */
+          /* ---------- site: Chromium, modo embutido ou janela espelhada ---------- */
           <>
             <div className="flex h-9 shrink-0 items-center gap-1 border-b border-carbon-700/70 px-2">
               <Globe size={13} className="shrink-0 text-acid-400" />
@@ -713,34 +745,55 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
                 {activeWeb.url}
               </span>
 
-              {/* alterna entre embutido e janela real espelhada */}
-              <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-carbon-600">
-                <button
-                  title="modo embutido (rápido, mas alguns sites bloqueiam)"
-                  onClick={() => {
-                    stopMirror();
-                    setWebMode((m) => ({ ...m, [activeWeb.id]: "frame" }));
-                  }}
-                  className={`px-2 py-1 font-mono text-[9px] uppercase tracking-wider transition-colors ${
-                    activeMode === "frame" ? "bg-acid-400/15 text-acid-300" : "text-carbon-400 hover:text-white"
-                  }`}
-                >
-                  embutido
-                </button>
-                {canUseWindowMode && <button
-                  title={canMirrorWindows
-                    ? "janela real espelhada (funciona com qualquer site)"
-                    : "abrir o site em uma janela do app"}
-                  onClick={() => setWebMode((m) => ({ ...m, [activeWeb.id]: "mirror" }))}
-                  className={`px-2 py-1 font-mono text-[9px] uppercase tracking-wider transition-colors ${
-                    activeMode === "mirror" ? "bg-acid-400/15 text-acid-300" : "text-carbon-400 hover:text-white"
-                  }`}
-                >
-                  janela
-                </button>}
-              </div>
+              {usesEmbeddedChromium ? (
+                <span className="rounded-md border border-acid-500/30 bg-acid-400/10 px-2 py-1 font-mono text-[9px] uppercase tracking-wider text-acid-300">
+                  Chromium
+                </span>
+              ) : (
+                <div className="flex shrink-0 items-center overflow-hidden rounded-md border border-carbon-600">
+                  <button
+                    title="modo embutido (rápido, mas alguns sites bloqueiam)"
+                    onClick={() => {
+                      stopMirror();
+                      setWebMode((m) => ({ ...m, [activeWeb.id]: "frame" }));
+                    }}
+                    className={`px-2 py-1 font-mono text-[9px] uppercase tracking-wider transition-colors ${
+                      activeMode === "frame" ? "bg-acid-400/15 text-acid-300" : "text-carbon-400 hover:text-white"
+                    }`}
+                  >
+                    embutido
+                  </button>
+                  {canUseWindowMode && <button
+                    title={canMirrorWindows
+                      ? "janela real espelhada (funciona com qualquer site)"
+                      : "abrir o site em uma janela do app"}
+                    onClick={() => setWebMode((m) => ({ ...m, [activeWeb.id]: "mirror" }))}
+                    className={`px-2 py-1 font-mono text-[9px] uppercase tracking-wider transition-colors ${
+                      activeMode === "mirror" ? "bg-acid-400/15 text-acid-300" : "text-carbon-400 hover:text-white"
+                    }`}
+                  >
+                    janela
+                  </button>}
+                </div>
+              )}
 
-              {activeMode === "frame" ? (
+              {usesEmbeddedChromium ? (
+                <button
+                  title="recarregar no Chromium"
+                  onClick={() => {
+                    void invoke("cef_close_browser", { mediaId: activeWeb.id })
+                      .then(() => setCefReloadKey((key) => key + 1))
+                      .catch((reason: unknown) =>
+                        setMirrorError(
+                          reason instanceof Error ? reason.message : String(reason)
+                        )
+                      );
+                  }}
+                  className="flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-md text-carbon-300 transition-colors hover:bg-carbon-700/60 hover:text-white"
+                >
+                  <RotateCw size={12.5} />
+                </button>
+              ) : activeMode === "frame" ? (
                 <button
                   title="recarregar"
                   onClick={() => setFrameKey((k) => k + 1)}
@@ -781,18 +834,24 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
               )}
 
               <button
-                title={canUseWindowMode ? "abrir em nova janela do app" : "abrir no navegador externo"}
+                title={
+                  usesEmbeddedChromium
+                    ? "abrir no navegador externo"
+                    : canUseWindowMode
+                      ? "abrir em nova janela do app"
+                      : "abrir no navegador externo"
+                }
                 onClick={() => {
                   const url = activeWeb.url;
                   if (!url) return;
-                  if (canUseWindowMode) {
-                    void openWebWindow(activeWeb);
-                  } else {
+                  if (usesEmbeddedChromium || !canUseWindowMode) {
                     void openExternalUrl(url).catch((error: unknown) =>
                       setMirrorError(
                         error instanceof Error ? error.message : "não foi possível abrir o site."
                       )
                     );
+                  } else {
+                    void openWebWindow(activeWeb);
                   }
                 }}
                 className="flex h-6.5 w-6.5 shrink-0 items-center justify-center rounded-md text-carbon-300 transition-colors hover:bg-carbon-700/60 hover:text-white"
@@ -801,7 +860,15 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
               </button>
             </div>
 
-            {activeMode === "frame" ? (
+            {usesEmbeddedChromium ? (
+              <CefBrowserSurface
+                key={`${activeWeb.id}:${cefReloadKey}`}
+                mediaId={activeWeb.id}
+                url={activeWeb.url!}
+                visible={!chooser && !linkOpen}
+                keepAlive
+              />
+            ) : activeMode === "frame" ? (
               <div className="relative min-h-0 flex-1 bg-white">
                 <iframe
                   key={`${activeWeb.id}-${frameKey}`}
@@ -1077,7 +1144,7 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
               <span>
                 <span className="block text-[12.5px] font-medium text-white">link de site</span>
                 <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-carbon-400">
-                  navegar dentro da janela
+                  abre no Chromium integrado do PC
                 </span>
               </span>
             </button>
@@ -1131,9 +1198,9 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
               adicionar à lista
             </button>
             <p className="mt-2 text-center font-mono text-[9px] leading-relaxed text-carbon-500">
-              alguns sites bloqueiam incorporação;
+              no PC, o site abre no Chromium integrado;
               <br />
-              nesses casos use o botão de abrir em nova janela
+              no celular, a exibição pode variar conforme o site
             </p>
           </div>
         </div>

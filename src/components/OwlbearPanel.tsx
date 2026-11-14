@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   AppWindow,
   Focus,
+  Globe,
   LoaderCircle,
   RefreshCw,
   ScreenShare,
@@ -10,7 +11,14 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { PanelChrome, HeaderIconBtn } from "./PanelChrome";
-import { isNativeApp, supportsWindowMirroring } from "../lib/platform";
+import { CefBrowserSurface } from "./CefBrowserSurface";
+import {
+  isNativeApp,
+  supportsEmbeddedChromium,
+  supportsWindowMirroring,
+} from "../lib/platform";
+
+const OWLBEAR_URL = "https://www.owlbear.rodeo/";
 
 interface Props {
   opened: boolean;
@@ -51,8 +59,10 @@ function TabletopPanelInner({ opened, onChange }: Props) {
   const [applications, setApplications] = useState<OpenApplication[]>([]);
   const [selectedApplicationId, setSelectedApplicationId] = useState("");
   const [loadingApplications, setLoadingApplications] = useState(false);
+  const [activeTab, setActiveTab] = useState<"mirror" | "owlbear">("mirror");
   const canMirrorWindows = supportsWindowMirroring();
   const nativeApp = isNativeApp();
+  const canOpenOwlbear = supportsEmbeddedChromium();
   const selectedApplication = applications.find(({ id }) => id === selectedApplicationId) ?? null;
 
   const refreshApplications = useCallback(async () => {
@@ -248,121 +258,166 @@ function TabletopPanelInner({ opened, onChange }: Props) {
         ) : undefined
       }
     >
-      <div className="relative min-h-0 flex-1 bg-black">
-        <video
-          ref={videoRef}
-          muted
-          playsInline
-          autoPlay
-          onClick={focusCapturedApp}
-          title={streaming ? "clique para tentar focar o aplicativo" : undefined}
-          className={`absolute inset-0 h-full w-full object-contain ${
-            streaming ? "cursor-pointer" : "hidden"
-          }`}
-        />
+      <div className="flex min-h-0 flex-1 flex-col bg-black">
+        <div role="tablist" aria-label="Conteúdo do tabletop"
+          className="flex shrink-0 items-center gap-1 border-b border-carbon-700/70 px-1.5 py-1">
+          <button type="button" role="tab" aria-selected={activeTab === "mirror"}
+            onClick={() => setActiveTab("mirror")}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] transition-colors ${
+              activeTab === "mirror"
+                ? "bg-acid-400/15 text-acid-300"
+                : "text-carbon-400 hover:bg-carbon-800 hover:text-white"
+            }`}>
+            <ScreenShare size={12} />
+            espelhar aplicativo
+          </button>
+          {canOpenOwlbear && (
+            <button type="button" role="tab" aria-selected={activeTab === "owlbear"}
+              onClick={() => setActiveTab("owlbear")}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-[9.5px] font-semibold uppercase tracking-[0.14em] transition-colors ${
+                activeTab === "owlbear"
+                  ? "bg-acid-400/15 text-acid-300"
+                  : "text-carbon-400 hover:bg-carbon-800 hover:text-white"
+              }`}>
+              <Globe size={12} />
+              Owlbear Rodeo
+            </button>
+          )}
+        </div>
 
-        {streaming && (
-          <>
-            <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full border border-ember-400/40 bg-carbon-950/80 px-2.5 py-1 backdrop-blur">
-              <span className="h-1.5 w-1.5 rounded-full bg-ember-400 animate-[pulse-dot_1.4s_ease-in-out_infinite]" />
-              <span className="max-w-[220px] truncate font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-ember-400">
-                {windowName} · ao vivo
-              </span>
-            </div>
+        <div className="relative min-h-0 flex-1">
+          <div role="tabpanel" hidden={activeTab !== "mirror"}
+            className="absolute inset-0">
+            <video
+              ref={videoRef}
+              muted
+              playsInline
+              autoPlay
+              onClick={focusCapturedApp}
+              title={streaming ? "clique para tentar focar o aplicativo" : undefined}
+              className={`absolute inset-0 h-full w-full object-contain ${
+                streaming ? "cursor-pointer" : "hidden"
+              }`}
+            />
 
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/80 to-transparent p-3">
-              <span className="rounded-full bg-carbon-950/80 px-3 py-1 font-mono text-[9.5px] uppercase tracking-[0.16em] text-carbon-200 backdrop-blur">
-                clique para focar · {surfaceLabel}
-              </span>
-            </div>
+            {streaming && (
+              <>
+                <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2 rounded-full border border-ember-400/40 bg-carbon-950/80 px-2.5 py-1 backdrop-blur">
+                  <span className="h-1.5 w-1.5 rounded-full bg-ember-400 animate-[pulse-dot_1.4s_ease-in-out_infinite]" />
+                  <span className="max-w-[220px] truncate font-mono text-[9px] font-semibold uppercase tracking-[0.18em] text-ember-400">
+                    {windowName} · ao vivo
+                  </span>
+                </div>
 
-            {focusHint && (
-              <button
-                onClick={() => setFocusHint(false)}
-                className="anim-pop-in absolute bottom-12 left-1/2 max-w-[90%] -translate-x-1/2 rounded-lg border border-carbon-600 bg-carbon-950/95 px-3 py-2 text-center text-[11px] leading-relaxed text-carbon-300 shadow-xl backdrop-blur"
-              >
-                se o sistema não trouxe o aplicativo para frente, use Alt+Tab
-                <span className="block font-mono text-[9px] uppercase tracking-wider text-carbon-500">
-                  toque para fechar
-                </span>
-              </button>
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center bg-gradient-to-t from-black/80 to-transparent p-3">
+                  <span className="rounded-full bg-carbon-950/80 px-3 py-1 font-mono text-[9.5px] uppercase tracking-[0.16em] text-carbon-200 backdrop-blur">
+                    clique para focar · {surfaceLabel}
+                  </span>
+                </div>
+
+                {focusHint && (
+                  <button
+                    onClick={() => setFocusHint(false)}
+                    className="anim-pop-in absolute bottom-12 left-1/2 max-w-[90%] -translate-x-1/2 rounded-lg border border-carbon-600 bg-carbon-950/95 px-3 py-2 text-center text-[11px] leading-relaxed text-carbon-300 shadow-xl backdrop-blur"
+                  >
+                    se o sistema não trouxe o aplicativo para frente, use Alt+Tab
+                    <span className="block font-mono text-[9px] uppercase tracking-wider text-carbon-500">
+                      toque para fechar
+                    </span>
+                  </button>
+                )}
+              </>
             )}
-          </>
-        )}
 
-        {!canMirrorWindows ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-            <ScreenShare size={24} strokeWidth={1.6} className="text-carbon-400" />
-            <p className="max-w-[300px] text-[12px] leading-relaxed text-carbon-300">
-              o espelhamento de outras janelas está disponível apenas no app desktop.
-            </p>
-          </div>
-        ) : !streaming && (
-          <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
-            {nativeApp && (
-              <div className="flex w-full max-w-[360px] items-center gap-2">
-                <select
-                  aria-label="Aplicativo para espelhar"
-                  value={selectedApplicationId}
-                  onChange={(event) => setSelectedApplicationId(event.target.value)}
-                  disabled={loadingApplications || applications.length === 0}
-                  className="min-w-0 flex-1 rounded-lg border border-carbon-600 bg-carbon-900 px-3 py-2 text-sm text-white disabled:opacity-60"
+            {!canMirrorWindows ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+                <ScreenShare size={24} strokeWidth={1.6} className="text-carbon-400" />
+                <p className="max-w-[300px] text-[12px] leading-relaxed text-carbon-300">
+                  o espelhamento de outras janelas está disponível apenas no app desktop.
+                </p>
+              </div>
+            ) : !streaming && (
+              <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
+                {nativeApp && (
+                  <div className="flex w-full max-w-[360px] items-center gap-2">
+                    <select
+                      aria-label="Aplicativo para espelhar"
+                      value={selectedApplicationId}
+                      onChange={(event) => setSelectedApplicationId(event.target.value)}
+                      disabled={loadingApplications || applications.length === 0}
+                      className="min-w-0 flex-1 rounded-lg border border-carbon-600 bg-carbon-900 px-3 py-2 text-sm text-white disabled:opacity-60"
+                    >
+                      {applications.length === 0 ? (
+                        <option value="">
+                          {loadingApplications ? "carregando aplicativos..." : "nenhum aplicativo encontrado"}
+                        </option>
+                      ) : applications.map((application) => (
+                        <option key={application.id} value={application.id}>{application.title}</option>
+                      ))}
+                    </select>
+                    <HeaderIconBtn
+                      title="atualizar aplicativos abertos"
+                      onClick={() => void refreshApplications()}
+                      disabled={loadingApplications}
+                    >
+                      <RefreshCw size={12} />
+                    </HeaderIconBtn>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => void chooseWindow()}
+                  disabled={busy || (nativeApp && !selectedApplication)}
+                  className="group flex flex-col items-center gap-4 rounded-2xl border border-dashed border-carbon-500 bg-carbon-900/60 px-10 py-8 transition-all hover:border-acid-500/60 hover:bg-carbon-850 active:scale-[0.98] disabled:opacity-60"
                 >
-                  {applications.length === 0 ? (
-                    <option value="">
-                      {loadingApplications ? "carregando aplicativos..." : "nenhum aplicativo encontrado"}
-                    </option>
-                  ) : applications.map((application) => (
-                    <option key={application.id} value={application.id}>{application.title}</option>
-                  ))}
-                </select>
-                <HeaderIconBtn
-                  title="atualizar aplicativos abertos"
-                  onClick={() => void refreshApplications()}
-                  disabled={loadingApplications}
-                >
-                  <RefreshCw size={12} />
-                </HeaderIconBtn>
+                  <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-carbon-600 bg-carbon-800 text-carbon-200 transition-colors group-hover:border-acid-500/50 group-hover:text-acid-300">
+                    {busy ? (
+                      <LoaderCircle size={24} className="anim-spin-slow" strokeWidth={1.6} />
+                    ) : (
+                      <ScreenShare size={24} strokeWidth={1.6} />
+                    )}
+                  </span>
+                  <span className="text-center">
+                    <span className="block font-display text-base font-semibold text-white">
+                      {busy ? "aguardando escolha..." : "escolher janela"}
+                    </span>
+                    <span className="mt-1 block max-w-[290px] font-mono text-[10px] leading-relaxed uppercase tracking-[0.14em] text-carbon-400">
+                      {nativeApp
+                        ? "selecione qualquer janela no seletor do Windows; o clique focará o aplicativo acima"
+                        : "selecione qualquer aplicativo aberto no computador para espelhar aqui"}
+                    </span>
+                  </span>
+                </button>
+
+                <p className="max-w-[330px] text-center text-[11px] leading-relaxed text-carbon-500">
+                  funciona com navegadores, mapas, leitores, aplicativos de tabletop e outras janelas.
+                  o sistema sempre pede sua permissão antes de capturar.
+                </p>
+
+                {error && <ErrText msg={error} />}
               </div>
             )}
+            {streaming && error && (
+              <div className="absolute bottom-12 left-1/2 z-10 w-max max-w-[90%] -translate-x-1/2">
+                <ErrText msg={error} />
+              </div>
+            )}
+          </div>
 
-            <button
-              onClick={() => void chooseWindow()}
-              disabled={busy || (nativeApp && !selectedApplication)}
-              className="group flex flex-col items-center gap-4 rounded-2xl border border-dashed border-carbon-500 bg-carbon-900/60 px-10 py-8 transition-all hover:border-acid-500/60 hover:bg-carbon-850 active:scale-[0.98] disabled:opacity-60"
+          {canOpenOwlbear && (
+            <div
+              role="tabpanel"
+              hidden={activeTab !== "owlbear"}
+              className="absolute inset-0 flex flex-col"
             >
-              <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-carbon-600 bg-carbon-800 text-carbon-200 transition-colors group-hover:border-acid-500/50 group-hover:text-acid-300">
-                {busy ? (
-                  <LoaderCircle size={24} className="anim-spin-slow" strokeWidth={1.6} />
-                ) : (
-                  <ScreenShare size={24} strokeWidth={1.6} />
-                )}
-              </span>
-              <span className="text-center">
-                <span className="block font-display text-base font-semibold text-white">
-                  {busy ? "aguardando escolha..." : "escolher janela"}
-                </span>
-                <span className="mt-1 block max-w-[290px] font-mono text-[10px] leading-relaxed uppercase tracking-[0.14em] text-carbon-400">
-                  {nativeApp
-                    ? "selecione qualquer janela no seletor do Windows; o clique focará o aplicativo acima"
-                    : "selecione qualquer aplicativo aberto no computador para espelhar aqui"}
-                </span>
-              </span>
-            </button>
-
-            <p className="max-w-[330px] text-center text-[11px] leading-relaxed text-carbon-500">
-              funciona com navegadores, mapas, leitores, aplicativos de tabletop e outras janelas.
-              o sistema sempre pede sua permissão antes de capturar.
-            </p>
-
-            {error && <ErrText msg={error} />}
-          </div>
-        )}
-        {streaming && error && (
-          <div className="absolute bottom-12 left-1/2 z-10 w-max max-w-[90%] -translate-x-1/2">
-            <ErrText msg={error} />
-          </div>
-        )}
+              <CefBrowserSurface
+                mediaId="tabletop-owlbear"
+                url={OWLBEAR_URL}
+                visible={activeTab === "owlbear"}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </PanelChrome>
   );
