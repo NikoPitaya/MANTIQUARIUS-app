@@ -14,7 +14,7 @@ import { NotesPanel } from "./components/NotesPanel";
 import { OwlbearPanel } from "./components/OwlbearPanel";
 import { AudioPanel } from "./components/AudioPanel";
 import { PdfPanel } from "./components/PdfPanel";
-import { VideoPanel } from "./components/VideoPanel";
+import { CinematicPopup, VideoPanel } from "./components/VideoPanel";
 import { NotebookPen, AppWindow, Music, FileText, Film, ChevronDown } from "lucide-react";
 import { lsGet, lsSet } from "./lib/store";
 import { isAndroidRuntime, isNativeApp } from "./lib/platform";
@@ -47,6 +47,11 @@ interface AutosaveMeta {
 }
 
 export default function App() {
+  const cinematicPopup = new URLSearchParams(window.location.search).get("cinematicPopup") === "1";
+  if (cinematicPopup) {
+    return <CinematicPopup />;
+  }
+
   const nativeApp = isNativeApp();
   const fullscreenTogglePending = useRef(false);
   const [screen, setScreen] = useState<"home" | "library" | "work">("home");

@@ -5,6 +5,8 @@ export const isNativeApp = (): boolean => isTauri();
 
 export const isAndroidRuntime = (): boolean => /android/i.test(navigator.userAgent);
 
+export const isDesktopNative = (): boolean => isNativeApp() && !isAndroidRuntime();
+
 export const supportsEmbeddedChromium = (): boolean =>
   isTauri() && !isAndroidRuntime() && /windows/i.test(navigator.userAgent);
 

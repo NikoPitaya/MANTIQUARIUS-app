@@ -12,7 +12,7 @@ import { VolumeSlider } from "./VolumeSlider";
 import { lsGet, lsSet } from "../lib/store";
 import { useReorder } from "../lib/useReorder";
 import { ItemActions } from "./ItemActions";
-import { isAndroidRuntime } from "../lib/platform";
+import { isAndroidRuntime, isDesktopNative } from "../lib/platform";
 
 interface Props {
   videos: OrdoMedia[];
@@ -88,8 +88,95 @@ const readVol = (): number => {
   return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : 1;
 };
 
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+export function CinematicPopup() {
+  const [media, setMedia] = useState<OrdoMedia | null>(null);
+  const [volume, setVolume] = useState(readVol);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "F11" && event.code !== "F11") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+      void (async () => {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const appWindow = getCurrentWindow();
+        await appWindow.setFullscreen(!(await appWindow.isFullscreen()));
+      })();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let unlisteners: Array<() => void> = [];
+    void (async () => {
+      const { emitTo, listen } = await import("@tauri-apps/api/event");
+      const unlistenMedia = await listen<OrdoMedia | null>("cinematic-popup-media", (event) => {
+        setMedia(event.payload);
+      });
+      if (!active) {
+        unlistenMedia();
+        return;
+      }
+      const unlistenVolume = await listen<number>("cinematic-popup-volume", (event) => {
+        setVolume(event.payload);
+      });
+      if (!active) {
+        unlistenMedia();
+        unlistenVolume();
+        return;
+      }
+      unlisteners = [unlistenMedia, unlistenVolume];
+      await emitTo("main", "cinematic-popup-ready");
+    })().catch((error: unknown) => {
+      console.error("Não foi possível iniciar a janela de cinematics.", error);
+    });
+    return () => {
+      active = false;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.volume = volume;
+  }, [media, volume]);
+
+  return (
+    <div className="fixed inset-0 bg-black">
+      {media && isImage(media) ? (
+        <img
+          key={media.id}
+          src={media.data}
+          alt={media.name}
+          draggable={false}
+          className="absolute inset-0 h-full w-full object-contain"
+        />
+      ) : media ? (
+        <video
+          key={media.id}
+          src={media.data}
+          controls
+          autoPlay
+          loop
+          playsInline
+          preload="auto"
+          ref={videoRef}
+          className="absolute inset-0 h-full w-full object-contain"
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
   const androidRuntime = isAndroidRuntime();
+  const desktopNative = isDesktopNative();
   const [tab, setTab] = useState<"cine" | "sfx">("cine");
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [volume, setVolume] = useState(readVol);
@@ -105,6 +192,7 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
   const currentUrl = useRef<string | null>(null);
   const blobCache = useRef(new Map<string, Blob>());
   const inputRef = useRef<HTMLInputElement>(null);
+  const popupOpeningRef = useRef<Promise<void> | null>(null);
   const { menu, open, close } = useContextMenu();
   const { dragProps, markerCls, move } = useReorder(videos, (next) => onChangeRef.current(next));
 
@@ -124,7 +212,17 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
       try { el.volume = volume; } catch { /* ignore */ }
     }
     lsSet("ordo:vol:video", String(volume));
-  }, [volume]);
+    if (desktopNative) {
+      void import("@tauri-apps/api/webviewWindow")
+        .then(async ({ WebviewWindow }) => {
+          if (await WebviewWindow.getByLabel("cinematic-popup")) {
+            const { emitTo } = await import("@tauri-apps/api/event");
+            await emitTo("cinematic-popup", "cinematic-popup-volume", volume);
+          }
+        })
+        .catch((error: unknown) => console.error("Não foi possível sincronizar o volume.", error));
+    }
+  }, [desktopNative, volume]);
 
   const getBlob = useCallback((m: OrdoMedia): Blob => {
     const c = blobCache.current.get(m.id);
@@ -146,18 +244,33 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
   /* poll popup state */
   useEffect(() => {
     const t = setInterval(() => {
-      const w = winRef.current;
-      const isOpen = !!(w && !w.closed);
-      setPopupOpen(isOpen);
-      if (!isOpen && playingRef.current) {
-        currentVideoEl.current = null;
-        revokeUrl();
-        setPlayingId(null);
-        setPhase("idle");
+      if (desktopNative) {
+        void (async () => {
+          const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+          const popup = await WebviewWindow.getByLabel("cinematic-popup");
+          const isOpen = !!popup;
+          setPopupOpen(isOpen);
+          if (!isOpen && playingRef.current) {
+            currentVideoEl.current = null;
+            revokeUrl();
+            setPlayingId(null);
+            setPhase("idle");
+          }
+        })();
+      } else {
+        const w = winRef.current;
+        const isOpen = !!(w && !w.closed);
+        setPopupOpen(isOpen);
+        if (!isOpen && playingRef.current) {
+          currentVideoEl.current = null;
+          revokeUrl();
+          setPlayingId(null);
+          setPhase("idle");
+        }
       }
     }, 900);
     return () => clearInterval(t);
-  }, [revokeUrl]);
+  }, [desktopNative, revokeUrl]);
 
   useEffect(
     () => () => {
@@ -167,7 +280,69 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
     [revokeUrl]
   );
 
+  const openDesktopWindow = useCallback(async (media?: OrdoMedia | null): Promise<void> => {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    const { emitTo, listen } = await import("@tauri-apps/api/event");
+    if (popupOpeningRef.current) await popupOpeningRef.current;
+    let existing = await WebviewWindow.getByLabel("cinematic-popup");
+    if (existing) {
+      await existing.setFocus();
+      if (media !== undefined) await emitTo("cinematic-popup", "cinematic-popup-media", media);
+      setPopupOpen(true);
+      return;
+    }
+
+    let resolveReady!: () => void;
+    let rejectReady!: (error: Error) => void;
+    const readyPromise = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
+    });
+    let unlistenReady: (() => void) | undefined;
+    const timeout = window.setTimeout(() => {
+      rejectReady(new Error("a janela de cinematics abriu, mas não concluiu a inicialização."));
+    }, 10000);
+    try {
+      unlistenReady = await listen("cinematic-popup-ready", () => resolveReady());
+      popupOpeningRef.current = readyPromise;
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        unlistenReady?.();
+        popupOpeningRef.current = null;
+      };
+      void readyPromise.then(cleanup, cleanup);
+
+      const url = new URL(window.location.href);
+      url.searchParams.set("cinematicPopup", "1");
+      const popup = new WebviewWindow("cinematic-popup", {
+        url: url.toString(),
+        title: "ORDO - cinematics",
+        width: 1280,
+        height: 720,
+        center: true,
+        decorations: true,
+      });
+      await readyPromise;
+      existing = await WebviewWindow.getByLabel("cinematic-popup");
+      if (!existing) throw new Error("a janela de cinematics fechou durante a inicialização.");
+      if (media !== undefined) await emitTo("cinematic-popup", "cinematic-popup-media", media);
+      await popup.setFocus();
+    } catch (error) {
+      window.clearTimeout(timeout);
+      unlistenReady?.();
+      popupOpeningRef.current = null;
+      throw error;
+    }
+    setPopupOpen(true);
+  }, []);
+
   const ensureWindow = useCallback((): Window | null => {
+    if (desktopNative) {
+      void openDesktopWindow().catch((error: unknown) => {
+        setPanelError(`não foi possível abrir ou focar a janela: ${errorMessage(error)}`);
+      });
+      return null;
+    }
     const existing = winRef.current;
     if (existing && !existing.closed) {
       try {
@@ -191,9 +366,9 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
     winRef.current = w;
     setPopupOpen(true);
     return w;
-  }, []);
+  }, [desktopNative, openDesktopWindow]);
 
-  const stop = useCallback(() => {
+  const stop = useCallback((clearDesktopPopup = true) => {
     const el = currentVideoEl.current;
     if (el && "pause" in el) el.pause();
     currentVideoEl.current = null;
@@ -209,7 +384,17 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
     setPlayingId(null);
     setPhase("idle");
     setInlineMedia(null);
-  }, [revokeUrl]);
+    if (desktopNative && clearDesktopPopup) {
+      void import("@tauri-apps/api/webviewWindow")
+        .then(async ({ WebviewWindow }) => {
+          if (await WebviewWindow.getByLabel("cinematic-popup")) {
+            const { emitTo } = await import("@tauri-apps/api/event");
+            await emitTo("cinematic-popup", "cinematic-popup-media", null);
+          }
+        })
+        .catch((error: unknown) => console.error("Não foi possível parar a cinematic.", error));
+    }
+  }, [desktopNative, revokeUrl]);
 
   const play = useCallback(
     (id: string) => {
@@ -233,6 +418,27 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
         setInlineMedia({ id, url });
         setPlayingId(id);
         setPhase(isImage(media) ? "playing" : "loading");
+        return;
+      }
+      if (desktopNative) {
+        stop(false);
+        setPanelError(null);
+        const blob = getBlob(media);
+        if (blob.size === 0) {
+          setPanelError("o arquivo está vazio.");
+          setPhase("error");
+          return;
+        }
+        setPlayingId(id);
+        setPhase("loading");
+        void openDesktopWindow(media)
+          .then(() => {
+            setPhase("playing");
+          })
+          .catch((error: unknown) => {
+            setPanelError(`falha ao iniciar a reprodução: ${errorMessage(error)}`);
+            setPhase("error");
+          });
         return;
       }
       const w = ensureWindow();
@@ -346,7 +552,7 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
         } catch { /* ignore */ }
       });
     },
-    [ensureWindow, getBlob, stop]
+    [desktopNative, ensureWindow, getBlob, openDesktopWindow, stop]
   );
 
   const addFiles = useCallback(async (files: FileList | File[]) => {
@@ -550,7 +756,7 @@ function VideoPanelInner({ videos, onChange, sfx, onSfxChange }: Props) {
                       : "border-carbon-700 bg-carbon-850/60 hover:border-carbon-500 hover:bg-carbon-800"
                   } ${markerCls(i)}`}
                 >
-                  <span title="arraste para reordenar" className="shrink-0 cursor-grab active:cursor-grabbing">
+                  <span data-reorder-handle title="arraste para reordenar" className="shrink-0 cursor-grab active:cursor-grabbing">
                     <GripVertical
                       size={13}
                       className="text-carbon-500 opacity-40 transition-opacity group-hover:opacity-80"

@@ -23,27 +23,49 @@ export function useReorder<T>(items: T[], onReorder: (next: T[]) => void) {
   /** props para espalhar no elemento de cada item da lista */
   const dragProps = useCallback(
     (index: number) => ({
-      draggable: true,
-      onDragStart: (e: React.DragEvent) => {
+      "data-reorder-index": index,
+      onMouseDown: (e: React.MouseEvent) => {
+        const target = e.target as HTMLElement;
+        if (e.button !== 0 || !target.closest("[data-reorder-handle]")) return;
+        e.preventDefault();
         dragIdx.current = index;
-        e.dataTransfer.effectAllowed = "move";
-      },
-      onDragOver: (e: React.DragEvent) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
         setOverIdx(index);
-      },
-      onDragLeave: () => setOverIdx((v) => (v === index ? null : v)),
-      onDrop: (e: React.DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (dragIdx.current !== null) move(dragIdx.current, index);
-        dragIdx.current = null;
-        setOverIdx(null);
-      },
-      onDragEnd: () => {
-        dragIdx.current = null;
-        setOverIdx(null);
+
+        const previousCursor = document.body.style.cursor;
+        const previousUserSelect = document.body.style.userSelect;
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+
+        const onMouseMove = (moveEvent: MouseEvent) => {
+          moveEvent.preventDefault();
+          const element = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY) as HTMLElement | null;
+          const row = element?.closest("[data-reorder-index]") as HTMLElement | null;
+          const targetIndex = row?.dataset.reorderIndex;
+          setOverIdx(targetIndex !== undefined ? Number(targetIndex) : null);
+        };
+
+        const cleanup = () => {
+          document.removeEventListener("mousemove", onMouseMove);
+          document.removeEventListener("mouseup", onMouseUp);
+          document.body.style.cursor = previousCursor;
+          document.body.style.userSelect = previousUserSelect;
+        };
+
+        const onMouseUp = (upEvent: MouseEvent) => {
+          upEvent.preventDefault();
+          const element = document.elementFromPoint(upEvent.clientX, upEvent.clientY) as HTMLElement | null;
+          const row = element?.closest("[data-reorder-index]") as HTMLElement | null;
+          const targetIndex = row?.dataset.reorderIndex;
+          if (dragIdx.current !== null && targetIndex !== undefined) {
+            move(dragIdx.current, Number(targetIndex));
+          }
+          dragIdx.current = null;
+          setOverIdx(null);
+          cleanup();
+        };
+
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
       },
     }),
     [move]
