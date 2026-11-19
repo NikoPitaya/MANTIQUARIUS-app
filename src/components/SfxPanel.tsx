@@ -536,7 +536,7 @@ export function SfxPanel({ sfx, onChange }: Props) {
                 } ${markerCls(i)}`}
               >
                 <div className="flex items-center gap-2">
-                  <span title="arraste para reordenar" className="shrink-0 cursor-grab active:cursor-grabbing">
+                  <span data-reorder-handle title="arraste para reordenar" className="shrink-0 cursor-grab active:cursor-grabbing">
                     <GripVertical
                       size={13}
                       className="text-carbon-500 opacity-40 transition-opacity group-hover:opacity-80"

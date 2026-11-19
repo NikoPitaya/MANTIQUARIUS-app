@@ -692,7 +692,7 @@ function PdfPanelInner({ pdfs, activePdfId, onChange }: Props) {
                     : "border-transparent hover:bg-carbon-800/70"
                 } ${markerCls(i)}`}
               >
-                <span title="arraste para reordenar" className="shrink-0 cursor-grab active:cursor-grabbing">
+                <span data-reorder-handle title="arraste para reordenar" className="shrink-0 cursor-grab active:cursor-grabbing">
                   <GripVertical
                     size={12}
                     className="text-carbon-500 opacity-40 transition-opacity group-hover:opacity-80"

@@ -12,6 +12,7 @@ import { newNote, fileToDataURL } from "../lib/ordo";
 import { lsGet, lsSet } from "../lib/store";
 import { PanelChrome, HeaderIconBtn } from "./PanelChrome";
 import { ContextMenuView, useContextMenu } from "./ContextMenu";
+import { useReorder } from "../lib/useReorder";
 
 interface Props {
   notes: OrdoNote[];
@@ -71,7 +72,6 @@ function NotesPanelInner({ notes, activeId, onChange }: Props) {
   const [tbOpen, setTbOpen] = useState(() => lsGet("ordo:ui:notes-tb") !== "0");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameVal, setRenameVal] = useState("");
-  const [overIdx, setOverIdx] = useState<number | null>(null);
   const [words, setWords] = useState(0);
   const [activeStates, setActiveStates] = useState<Record<string, boolean>>({});
   const [blockVal, setBlockVal] = useState("P");
@@ -80,7 +80,6 @@ function NotesPanelInner({ notes, activeId, onChange }: Props) {
 
   const editorRef = useRef<HTMLDivElement>(null);
   const savedRange = useRef<Range | null>(null);
-  const dragIdx = useRef<number | null>(null);
   const imgInputRef = useRef<HTMLInputElement>(null);
   const skipBlurApply = useRef(false);
   const sizeRef = useRef<number>(15);
@@ -103,6 +102,7 @@ function NotesPanelInner({ notes, activeId, onChange }: Props) {
   useEffect(() => { notesRef.current = notes; });
   useEffect(() => { activeIdRef.current = activeId; });
   useEffect(() => { onChangeRef.current = onChange; });
+  const { dragProps, markerCls } = useReorder(notes, (next) => onChangeRef.current(next));
 
   /* ---- editor <-> state sync ---- */
   const sync = useCallback(() => {
@@ -551,14 +551,6 @@ function NotesPanelInner({ notes, activeId, onChange }: Props) {
     onChangeRef.current(notesRef.current.map((n) => (n.id === id ? { ...n, title: v } : n)));
   }, [renamingId, renameVal]);
 
-  const reorder = useCallback((from: number, to: number) => {
-    const arr = [...notesRef.current];
-    if (from === to || from < 0 || from >= arr.length) return;
-    const [it] = arr.splice(from, 1);
-    arr.splice(Math.min(to, arr.length), 0, it);
-    onChangeRef.current(arr);
-  }, []);
-
   const setSb = (v: boolean) => {
     setSbOpen(v);
     lsSet("ordo:ui:notes-sb", v ? "1" : "0");
@@ -638,37 +630,18 @@ function NotesPanelInner({ notes, activeId, onChange }: Props) {
             {notes.map((n, i) => (
               <div
                 key={n.id}
-                draggable={renamingId !== n.id}
-                onDragStart={(e) => {
-                  dragIdx.current = i;
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  setOverIdx(i);
-                }}
-                onDragLeave={() => setOverIdx((v) => (v === i ? null : v))}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragIdx.current !== null) reorder(dragIdx.current, i);
-                  dragIdx.current = null;
-                  setOverIdx(null);
-                }}
-                onDragEnd={() => {
-                  dragIdx.current = null;
-                  setOverIdx(null);
-                }}
+                {...dragProps(i)}
                 onClick={() => activeId !== n.id && onChange(notesRef.current, n.id)}
                 className={`group relative mb-0.5 flex cursor-pointer items-center gap-1 rounded-lg border border-transparent px-1.5 py-[7px] transition-colors ${
                   n.id === activeId
                     ? "border-carbon-600 bg-carbon-750"
                     : "hover:bg-carbon-800/70"
-                } ${overIdx === i ? "before:absolute before:-top-[2.5px] before:left-1 before:right-1 before:h-[2px] before:rounded before:bg-acid-400" : ""}`}
+                } ${markerCls(i)}`}
               >
                 <span className={`absolute -ml-0.5 h-4 w-[2.5px] rounded-full bg-acid-400 transition-opacity ${n.id === activeId ? "opacity-100" : "opacity-0"}`} />
                 <GripVertical
                   size={12}
+                  data-reorder-handle
                   className={`shrink-0 cursor-grab text-carbon-500 transition-opacity active:cursor-grabbing ${n.id === activeId ? "opacity-60" : "opacity-0 group-hover:opacity-60"}`}
                 />
                 {renamingId === n.id ? (
